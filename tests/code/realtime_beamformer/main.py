@@ -119,8 +119,8 @@ if __name__ == '__main__':
                image_z_range=image_z_range,
                db_range=50,
                colorscale='Greys',
-               save_fig=True, 
-               show=False,
+               save_fig=False,
+               show=True,
                path_to_save='.')
 
 
