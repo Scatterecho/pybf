@@ -35,6 +35,7 @@ from pybf.pybf.signal_processing import filter_band_pass
 from pybf.pybf.signal_processing import hilbert_interpolate
 
 from pybf.pybf.bf_cores import delay_and_sum_numba, delay_and_sum_numpy
+from pybf.pybf.bf_cores import delay_and_sum_iq_phase_rotator_numba
 from pybf.scripts.visualize_image_dataset import visualize_image_dataset
 
 # Constants
@@ -123,6 +124,15 @@ class BFCartesianRealTime():
 
         self._tx_delays_samples = convert_time_to_samples(self._tx_delays, self._f_sampling_proc,0,0)
 
+        # Delay-sample tables for direct baseband IQ beamforming. They are
+        # computed on the decimated IQ sampling grid, before interpolation.
+        self._f_sampling_iq = self._f_sampling / self._decimation_factor
+        self._rx_delays_samples_iq = np.multiply(self._rx_delays - self._start_time + self._correction_time_shift,
+                                                 self._f_sampling_iq).astype(np.float32)
+
+        self._tx_delays_samples_iq = np.multiply(self._tx_delays, self._f_sampling_iq).astype(np.float32)
+        self._iq_phase_coeff_rad_per_sample = 2 * np.pi * self._transducer.f_central_hz / self._f_sampling_iq
+
         # 4 Calculate Apodization
         if is_inherited is False:
             print('Apodization precalculation...')
@@ -166,8 +176,30 @@ class BFCartesianRealTime():
 
         return rf_data_proc
 
+    # Data preprocessing for direct IQ-domain beamforming.
+    # This path keeps the data at baseband and avoids interpolation +
+    # remodulation of the full channel data. The missing carrier phase is
+    # restored inside the DAS kernel with a delay-dependent phase rotator.
+    def _preprocess_data_iq(self, rf_data):
+
+        if self._bp_filter_params is not None:
+            rf_data_filt = filter_band_pass(rf_data.astype(np.float32),
+                                            self._f_sampling,
+                                            self._bp_filter_params[0],
+                                            self._bp_filter_params[1],
+                                            self._bp_filter_params[2])
+        else:
+            rf_data_filt = rf_data
+
+        rf_data_IQ = demodulate_decimate(rf_data_filt,
+                                         self._f_sampling,
+                                         self._transducer.f_central_hz,
+                                         self._decimation_factor)
+
+        return rf_data_IQ
+
         # Beamform the data using selected BF-core
-    def beamform(self, rf_data, numba_active=False):
+    def beamform(self, rf_data, numba_active=False, iq_phase_correction=False):
 
         print('Beamforming...')
         print (' ')
@@ -192,22 +224,40 @@ class BFCartesianRealTime():
         # Iterate over acquisitions
         for i in acqs_to_process:
 
-            rf_data_proc = self._preprocess_data(rf_data_reshaped[i, :, :])
+            if iq_phase_correction is True:
+                rf_data_proc = self._preprocess_data_iq(rf_data_reshaped[i, :, :])
 
-            rf_data_proc_trans = np.transpose(rf_data_proc)
+                rf_data_proc_trans = np.ascontiguousarray(np.transpose(rf_data_proc))
 
-            # Summ up Tx and RX delays
-            delays_samples = self._rx_delays_samples + self._tx_delays_samples[i, :]
+                # Sum Tx and RX delays on the IQ sampling grid. Keep fractional
+                # sample positions; the IQ DAS kernel performs linear
+                # interpolation instead of full-signal upsampling.
+                delays_samples = self._rx_delays_samples_iq + self._tx_delays_samples_iq[i, :]
+                delays_samples = np.ascontiguousarray(delays_samples, dtype=np.float32)
 
-            # Make delay and sum operation + apodization
-            if numba_active is True:
-                das_out[i,:] = delay_and_sum_numba(rf_data_proc_trans, 
-                                                   delays_samples.reshape(1, delays_samples.shape[0], -1), 
+                # Make delay and sum operation directly on baseband IQ.
+                das_out[i,:] = delay_and_sum_iq_phase_rotator_numba(
+                                                   rf_data_proc_trans,
+                                                   delays_samples.reshape(1, delays_samples.shape[0], -1),
+                                                   self._iq_phase_coeff_rad_per_sample,
                                                    apod_weights=self._apod)
-            else:                                    
-                das_out[i,:] = delay_and_sum_numpy(rf_data_proc_trans, 
-                                                   delays_samples.reshape(1, delays_samples.shape[0], -1), 
-                                                   apod_weights=self._apod)
+            else:
+                rf_data_proc = self._preprocess_data(rf_data_reshaped[i, :, :])
+
+                rf_data_proc_trans = np.transpose(rf_data_proc)
+
+                # Summ up Tx and RX delays
+                delays_samples = self._rx_delays_samples + self._tx_delays_samples[i, :]
+
+                # Make delay and sum operation + apodization
+                if numba_active is True:
+                    das_out[i,:] = delay_and_sum_numba(rf_data_proc_trans,
+                                                       delays_samples.reshape(1, delays_samples.shape[0], -1),
+                                                       apod_weights=self._apod)
+                else:
+                    das_out[i,:] = delay_and_sum_numpy(rf_data_proc_trans,
+                                                       delays_samples.reshape(1, delays_samples.shape[0], -1),
+                                                       apod_weights=self._apod)
 
         # Coherent compounding
         das_out_compound = np.sum(das_out[acqs_to_process, :], axis = 0)
