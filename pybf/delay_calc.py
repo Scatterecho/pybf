@@ -24,7 +24,8 @@ def calc_propagation_delays(tx_strategy,
                             elements_coords, 
                             pixels_coords, 
                             speed_of_sound,
-                            simulation_flag = False):
+                            simulation_flag = False,
+                            tx_nominal_speed_of_sound = None):
 
     # Calculate the number of channels for given data
     num_of_elements = elements_coords.shape[1]
@@ -52,8 +53,22 @@ def calc_propagation_delays(tx_strategy,
         print('Number of plane waves: ', num_of_pw)
         print('Maximum angle: ', max_angle, '°')
 
-        # Calculate angles
+        # Calculate angles.
+        #
+        # max_angle is treated as the plane-wave steering angle designed by the
+        # transmit delay law under a nominal speed of sound. If reconstruction is
+        # performed with a different homogeneous speed of sound, approximate the
+        # actual propagation angle using the Snell/eikonal relation:
+        #
+        #   sin(theta) / speed_of_sound = sin(alpha) / tx_nominal_speed_of_sound
+        #
+        # where alpha is the nominal transmit angle and theta is the angle used
+        # for reconstruction.
         pw_angles_rad = np.radians(np.linspace(-max_angle, max_angle, num_of_pw))
+        if tx_nominal_speed_of_sound is not None:
+            sin_theta = np.sin(pw_angles_rad) * speed_of_sound / tx_nominal_speed_of_sound
+            sin_theta = np.clip(sin_theta, -1.0, 1.0)
+            pw_angles_rad = np.arcsin(sin_theta)
         pw_angles_rad = pw_angles_rad.reshape(-1, 1)
 
     

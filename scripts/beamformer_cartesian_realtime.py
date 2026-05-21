@@ -61,6 +61,8 @@ class BFCartesianRealTime():
                  envelope_detector='I_Q',
                  picmus_dataset=False,
                  channel_reduction=None,
+                 reconstruction_speed_of_sound=None,
+                 tx_nominal_speed_of_sound=None,
                  is_inherited=False):
 
         # 1 Specify transducer object
@@ -77,12 +79,23 @@ class BFCartesianRealTime():
         # 3 Precalculate delays
         print('Delays precalculation...')
         self._tx_strategy = tx_strategy
+        if reconstruction_speed_of_sound is None:
+            self._reconstruction_speed_of_sound = self._transducer.speed_of_sound
+        else:
+            self._reconstruction_speed_of_sound = reconstruction_speed_of_sound
+
+        if tx_nominal_speed_of_sound is None:
+            self._tx_nominal_speed_of_sound = self._reconstruction_speed_of_sound
+        else:
+            self._tx_nominal_speed_of_sound = tx_nominal_speed_of_sound
+
         self._rx_delays, self._tx_delays = calc_propagation_delays(self._tx_strategy,
                                                                    self._transducer.num_of_elements,
                                                                    self._transducer.elements_coords,
                                                                    self._pixels_coords,
-                                                                   self._transducer.speed_of_sound,
-                                                                   simulation_flag=picmus_dataset)
+                                                                   self._reconstruction_speed_of_sound,
+                                                                   simulation_flag=picmus_dataset,
+                                                                   tx_nominal_speed_of_sound=self._tx_nominal_speed_of_sound)
 
         # Calculate final sampling rate for preprocessed data
         self._f_sampling = f_sampling

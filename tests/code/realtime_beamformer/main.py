@@ -87,6 +87,20 @@ if __name__ == '__main__':
 
     alpha_fov_apod = 40
 
+    # Speed-of-sound controls for reconstruction experiments.
+    #
+    # RECONSTRUCTION_SPEED_OF_SOUND:
+    #   Homogeneous speed of sound used by receive/transmit delay calculation.
+    #
+    # TX_NOMINAL_SPEED_OF_SOUND:
+    #   Nominal speed of sound assumed by the transmit plane-wave steering law.
+    #   If it differs from RECONSTRUCTION_SPEED_OF_SOUND, pybf corrects the
+    #   plane-wave angle using theta = asin(sin(alpha) * sos / sos_PW).
+    #
+    # Try values such as 1480, 1540, or 1600 to observe reconstruction changes.
+    RECONSTRUCTION_SPEED_OF_SOUND = 1540
+    TX_NOMINAL_SPEED_OF_SOUND = 1540
+
     # 1 Plane waves with inclination angle 0
     tx_strategy = ['PW_1_0', [0]]
 
@@ -104,7 +118,9 @@ if __name__ == '__main__':
                              start_time=start_time,
                              correction_time_shift=correction_time_shift,
                              alpha_fov_apod=alpha_fov_apod,
-                             bp_filter_params=None)
+                             bp_filter_params=None,
+                             reconstruction_speed_of_sound=RECONSTRUCTION_SPEED_OF_SOUND,
+                             tx_nominal_speed_of_sound=TX_NOMINAL_SPEED_OF_SOUND)
 
     # Run beamformer
     img_data = bf.beamform(rf_data)
@@ -114,7 +130,8 @@ if __name__ == '__main__':
                scatters_coords_xz=None,
                elements_coords_xz=None,
                framework='plotly',
-               title='Sample Image',
+               title='Sample Image, sos={} m/s, sos_PW={} m/s'.format(RECONSTRUCTION_SPEED_OF_SOUND,
+                                                                       TX_NOMINAL_SPEED_OF_SOUND),
                image_x_range=image_x_range,
                image_z_range=image_z_range,
                db_range=50,
