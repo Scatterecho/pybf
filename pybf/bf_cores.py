@@ -94,6 +94,54 @@ def delay_and_sum_iq_phase_rotator_numba(iq_data_in,
 
     return das_out
 
+# Perform delay and sum directly on baseband IQ data with carrier phase rotation
+# using lookup tables for the integer and fractional parts of the phase.
+# This keeps the same operation order as delay_and_sum_iq_phase_rotator_numba:
+#
+#     interpolate IQ at fractional delay, then apply exp(j*phase)
+#
+# but avoids evaluating cos/sin in the innermost loop.
+@jit(nopython = True, parallel = True, nogil = True)
+def delay_and_sum_iq_phase_lut_numba(iq_data_in,
+                                     delays_samples,
+                                     integer_phase_lut,
+                                     fractional_phase_lut,
+                                     apod_weights = None):
+
+    n_elements = iq_data_in.shape[1]
+    n_modes = delays_samples.shape[0]
+    n_points = delays_samples.shape[2]
+    n_fractional_bins = fractional_phase_lut.shape[0]
+
+    # Allocate array
+    das_out = np.zeros((n_modes, n_points), dtype=np.complex64)
+
+    # Iterate over modes, points, elements
+    for i in range(n_modes):
+        for j in prange(n_points):
+            for k in range(n_elements):
+                sample_pos = delays_samples[i, k, j]
+                sample_idx = int(math.floor(sample_pos))
+
+                if sample_idx >= 0 and sample_idx < iq_data_in.shape[0] - 1:
+                    frac = sample_pos - sample_idx
+                    frac_idx = int(frac * (n_fractional_bins - 1) + 0.5)
+                    if frac_idx < 0:
+                        frac_idx = 0
+                    elif frac_idx > n_fractional_bins - 1:
+                        frac_idx = n_fractional_bins - 1
+
+                    iq_sample = iq_data_in[sample_idx, k] * (1.0 - frac) + iq_data_in[sample_idx + 1, k] * frac
+                    rotator = integer_phase_lut[sample_idx] * fractional_phase_lut[frac_idx]
+                    sample = iq_sample * rotator
+
+                    if apod_weights is None:
+                        das_out[i, j] += sample
+                    else:
+                        das_out[i, j] += sample * apod_weights[j, k]
+
+    return das_out
+
 # Perform delay and sum operation with numpy
 # Input: rf_data_in of shape (n_samples x n_elements)
 # delays_idx of shape (n_modes x n_elements x n_points)

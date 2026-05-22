@@ -36,6 +36,7 @@ from pybf.pybf.signal_processing import hilbert_interpolate
 
 from pybf.pybf.bf_cores import delay_and_sum_numba, delay_and_sum_numpy
 from pybf.pybf.bf_cores import delay_and_sum_iq_phase_rotator_numba
+from pybf.pybf.bf_cores import delay_and_sum_iq_phase_lut_numba
 from pybf.scripts.visualize_image_dataset import visualize_image_dataset
 
 # Constants
@@ -198,8 +199,21 @@ class BFCartesianRealTime():
 
         return rf_data_IQ
 
+    # Build phase rotator lookup tables for direct IQ-domain beamforming.
+    # integer_phase_lut[n] = exp(j * phase_coeff * n)
+    # fractional_phase_lut[b] approximates exp(j * phase_coeff * frac)
+    def _calc_iq_phase_luts(self, n_samples, fractional_lut_size):
+
+        integer_idx = np.arange(0, n_samples, dtype=np.float32)
+        integer_phase_lut = np.exp(1.j * self._iq_phase_coeff_rad_per_sample * integer_idx).astype(np.complex64)
+
+        fractional_idx = np.linspace(0, 1, fractional_lut_size, dtype=np.float32)
+        fractional_phase_lut = np.exp(1.j * self._iq_phase_coeff_rad_per_sample * fractional_idx).astype(np.complex64)
+
+        return integer_phase_lut, fractional_phase_lut
+
         # Beamform the data using selected BF-core
-    def beamform(self, rf_data, numba_active=False, iq_phase_correction=False):
+    def beamform(self, rf_data, numba_active=False, iq_phase_correction=False, iq_phase_lut_size=0):
 
         print('Beamforming...')
         print (' ')
@@ -236,11 +250,23 @@ class BFCartesianRealTime():
                 delays_samples = np.ascontiguousarray(delays_samples, dtype=np.float32)
 
                 # Make delay and sum operation directly on baseband IQ.
-                das_out[i,:] = delay_and_sum_iq_phase_rotator_numba(
-                                                   rf_data_proc_trans,
-                                                   delays_samples.reshape(1, delays_samples.shape[0], -1),
-                                                   self._iq_phase_coeff_rad_per_sample,
-                                                   apod_weights=self._apod)
+                if iq_phase_lut_size is not None and iq_phase_lut_size > 1:
+                    integer_phase_lut, fractional_phase_lut = self._calc_iq_phase_luts(
+                        rf_data_proc_trans.shape[0],
+                        iq_phase_lut_size)
+
+                    das_out[i,:] = delay_and_sum_iq_phase_lut_numba(
+                                                       rf_data_proc_trans,
+                                                       delays_samples.reshape(1, delays_samples.shape[0], -1),
+                                                       integer_phase_lut,
+                                                       fractional_phase_lut,
+                                                       apod_weights=self._apod)
+                else:
+                    das_out[i,:] = delay_and_sum_iq_phase_rotator_numba(
+                                                       rf_data_proc_trans,
+                                                       delays_samples.reshape(1, delays_samples.shape[0], -1),
+                                                       self._iq_phase_coeff_rad_per_sample,
+                                                       apod_weights=self._apod)
             else:
                 rf_data_proc = self._preprocess_data(rf_data_reshaped[i, :, :])
 

@@ -7,6 +7,9 @@ Benchmark full-frame PyBF beamforming paths:
 2. Direct-IQ path added for engineering experiments:
        RF -> IQ demodulate -> DAS on IQ with delay-dependent phase rotation
 
+3. Phase-LUT IQ path:
+       RF -> IQ demodulate -> DAS on IQ with phase lookup tables
+
 The visual comparison image is saved by default to:
     tests/code/benchmark_iq_phase_rotator/iq_phase_rotator_comparison.png
 """
@@ -100,11 +103,16 @@ def summarize(times):
     }
 
 
-def measure_path(label, bf, rf_data, repeats, iq_phase_correction):
+def measure_path(label, bf, rf_data, repeats, iq_phase_correction, iq_phase_lut_size=0):
     print("\n" + "=" * 78)
     print("Path:", label)
     print("Warmup run, includes any JIT compilation needed by this path...")
-    _ = bf.beamform(rf_data, numba_active=True, iq_phase_correction=iq_phase_correction)
+    _ = bf.beamform(
+        rf_data,
+        numba_active=True,
+        iq_phase_correction=iq_phase_correction,
+        iq_phase_lut_size=iq_phase_lut_size,
+    )
 
     times = []
     rss_deltas = []
@@ -114,7 +122,12 @@ def measure_path(label, bf, rf_data, repeats, iq_phase_correction):
         gc.collect()
         before = rss_mb()
         start = time.perf_counter()
-        last_img = bf.beamform(rf_data, numba_active=True, iq_phase_correction=iq_phase_correction)
+        last_img = bf.beamform(
+            rf_data,
+            numba_active=True,
+            iq_phase_correction=iq_phase_correction,
+            iq_phase_lut_size=iq_phase_lut_size,
+        )
         elapsed = time.perf_counter() - start
         after = rss_mb()
         times.append(elapsed)
@@ -166,7 +179,7 @@ def image_quality_metrics(ref_img, test_img):
     }
 
 
-def save_comparison_figure(ref_db, iq_db, diff_db, image_x_range, image_z_range, output_path):
+def save_comparison_figure(ref_db, iq_db, diff_db, image_x_range, image_z_range, output_path, title):
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -181,12 +194,12 @@ def save_comparison_figure(ref_db, iq_db, diff_db, image_x_range, image_z_range,
     fig.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
 
     im1 = axes[1].imshow(iq_db, cmap="gray", vmin=-50, vmax=0, extent=extent, aspect="auto")
-    axes[1].set_title("IQ + phase rotator DAS")
+    axes[1].set_title(title)
     axes[1].set_xlabel("x, m")
     fig.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
 
     im2 = axes[2].imshow(diff_db, cmap="bwr", vmin=-12, vmax=12, extent=extent, aspect="auto")
-    axes[2].set_title("Difference, IQ - reference, dB")
+    axes[2].set_title("Difference, test - reference, dB")
     axes[2].set_xlabel("x, m")
     fig.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
 
@@ -214,6 +227,7 @@ def main():
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--decimation-factor", type=int, default=1)
     parser.add_argument("--interpolation-factor", type=int, default=10)
+    parser.add_argument("--phase-lut-size", type=int, default=256)
     parser.add_argument("--reconstruction-sos", type=float, default=1540.0)
     parser.add_argument("--tx-nominal-sos", type=float, default=1540.0)
     parser.add_argument("--output", type=str, default=str(DEFAULT_OUTPUT))
@@ -224,6 +238,7 @@ def main():
     print("RF data:", RF_PATH)
     print("Image resolution:", args.image_res)
     print("Repeats:", args.repeats)
+    print("Phase LUT size:", args.phase_lut_size)
 
     rf_data = np.genfromtxt(str(RF_PATH), delimiter=",")
     analytic_rf_mb, iq_mb = estimate_preprocessed_memory_mb(
@@ -235,6 +250,7 @@ def main():
     print("\nEstimated per-frame preprocessed signal array memory:")
     print("  Analytic RF path: {:.1f} MB".format(analytic_rf_mb))
     print("  Direct IQ path:   {:.1f} MB".format(iq_mb))
+    print("  Phase-LUT IQ:     {:.1f} MB + tiny phase LUTs".format(iq_mb))
     print("  Ratio:            {:.1f}x".format(analytic_rf_mb / max(iq_mb, 1e-12)))
 
     bf, image_x_range, image_z_range = build_beamformer(
@@ -254,34 +270,58 @@ def main():
     )
 
     iq_img, iq_stats, _ = measure_path(
-        "Direct IQ path, RF -> IQ -> phase-rotator Numba DAS",
+        "Direct IQ path, RF -> IQ -> per-delay phase-rotator Numba DAS",
         bf,
         rf_data,
         args.repeats,
         iq_phase_correction=True,
+        iq_phase_lut_size=0,
+    )
+
+    iq_lut_img, iq_lut_stats, _ = measure_path(
+        "Phase-LUT IQ path, RF -> IQ -> LUT phase-rotator Numba DAS",
+        bf,
+        rf_data,
+        args.repeats,
+        iq_phase_correction=True,
+        iq_phase_lut_size=args.phase_lut_size,
     )
 
     metrics = image_quality_metrics(ref_img, iq_img)
+    lut_metrics = image_quality_metrics(ref_img, iq_lut_img)
     output_path = save_comparison_figure(
-        metrics["ref_db"],
-        metrics["test_db"],
-        metrics["diff_db"],
+        lut_metrics["ref_db"],
+        lut_metrics["test_db"],
+        lut_metrics["diff_db"],
         image_x_range,
         image_z_range,
         args.output,
+        "Phase-LUT IQ DAS",
     )
 
     print("\n" + "=" * 78)
     print("Compact summary")
-    print("  Analytic RF median time: {:.4f} s".format(ref_stats["median"]))
-    print("  Direct IQ median time:   {:.4f} s".format(iq_stats["median"]))
-    print("  Speedup RF/IQ:           {:.2f}x".format(ref_stats["median"] / max(iq_stats["median"], 1e-12)))
+    print("  Analytic RF median time:      {:.4f} s".format(ref_stats["median"]))
+    print("  Direct IQ median time:        {:.4f} s".format(iq_stats["median"]))
+    print("  Phase-LUT IQ median time:     {:.4f} s".format(iq_lut_stats["median"]))
+    print("  Speedup RF/direct-IQ:         {:.2f}x".format(ref_stats["median"] / max(iq_stats["median"], 1e-12)))
+    print("  Speedup RF/phase-LUT-IQ:      {:.2f}x".format(ref_stats["median"] / max(iq_lut_stats["median"], 1e-12)))
+    print("  Speedup direct/phase-LUT:     {:.2f}x".format(iq_stats["median"] / max(iq_lut_stats["median"], 1e-12)))
+
     print("\nImage similarity, analytic RF path used as reference:")
-    print("  Complex relative L2 error: {:.4g}".format(metrics["rel_l2_complex"]))
-    print("  Magnitude relative L2 error: {:.4g}".format(metrics["rel_l2_mag"]))
-    print("  dB image correlation:        {:.4f}".format(metrics["corr_db"]))
-    print("  Mean absolute dB diff:       {:.4f} dB".format(metrics["mae_db"]))
-    print("  95th percentile |dB diff|:   {:.4f} dB".format(metrics["p95_abs_db"]))
+    print("  Direct IQ:")
+    print("    Complex relative L2 error: {:.4g}".format(metrics["rel_l2_complex"]))
+    print("    Magnitude relative L2 error: {:.4g}".format(metrics["rel_l2_mag"]))
+    print("    dB image correlation:        {:.4f}".format(metrics["corr_db"]))
+    print("    Mean absolute dB diff:       {:.4f} dB".format(metrics["mae_db"]))
+    print("    95th percentile |dB diff|:   {:.4f} dB".format(metrics["p95_abs_db"]))
+
+    print("  Phase-LUT IQ:")
+    print("    Complex relative L2 error: {:.4g}".format(lut_metrics["rel_l2_complex"]))
+    print("    Magnitude relative L2 error: {:.4g}".format(lut_metrics["rel_l2_mag"]))
+    print("    dB image correlation:        {:.4f}".format(lut_metrics["corr_db"]))
+    print("    Mean absolute dB diff:       {:.4f} dB".format(lut_metrics["mae_db"]))
+    print("    95th percentile |dB diff|:   {:.4f} dB".format(lut_metrics["p95_abs_db"]))
     print("\nSaved comparison figure:")
     print("  {}".format(output_path))
 
