@@ -169,9 +169,14 @@ if __name__ == '__main__':
 
     FLAGS, unparsed = parser.parse_known_args()
 
-    # Run main function
-    visualize_image_dataset(FLAGS.path_to_img_dataset,
-                            FLAGS.save_visualized_images,
-                            FLAGS.frames_to_plot,
-                            FLAGS.low_res_img_to_plot,
-                            FLAGS.db_range)
+    # Run main function.
+    #
+    # Use keyword arguments here because visualize_image_dataset has several
+    # optional parameters before frames_to_plot. Passing them positionally can
+    # shift values into the wrong slots, e.g. db_range can accidentally become
+    # frames_to_plot and then fail when len(frames_to_plot) is evaluated.
+    visualize_image_dataset(path_to_img_dataset=FLAGS.path_to_img_dataset,
+                            save_visualized_images=FLAGS.save_visualized_images,
+                            frames_to_plot=FLAGS.frames_to_plot,
+                            low_res_img_to_plot=FLAGS.low_res_img_to_plot,
+                            db_range=FLAGS.db_range)
