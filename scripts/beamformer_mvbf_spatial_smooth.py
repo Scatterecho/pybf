@@ -60,7 +60,9 @@ class BFMVBFspatial(BFCartesianRealTime):
                  envelope_detector='I_Q',
                  picmus_dataset=False,
                  channel_reduction=None,
-                 window_width=16):
+                 window_width=16,
+                 diagonal_loading_scale=1.0,
+                 apply_apodization=False):
 
         super(BFMVBFspatial, self).__init__(f_sampling, tx_strategy, transducer_obj,
                  decimation_factor, interpolation_factor, image_res, 
@@ -75,6 +77,8 @@ class BFMVBFspatial(BFCartesianRealTime):
         
         self.channel_reduction = channel_reduction
         self.window_width = window_width
+        self.diagonal_loading_scale = diagonal_loading_scale
+        self.apply_apodization = apply_apodization
 
         # Beamform the data using selected BF-core
     def beamform(self, rf_data, numba_active=False):
@@ -165,10 +169,11 @@ class BFMVBFspatial(BFCartesianRealTime):
         start_i = int(np.ceil((ch_nr - channel_reduction)/2))
         stop_i = int(start_i + channel_reduction)
 
-        mvbf_data = rf_data[fancy_idx_samples, fancy_idx_channels][0,:,start_i:stop_i]
-
-        das_out = np.zeros(mvbf_data.shape[0], dtype=np.complex64)
         data_mask = self._apod[:,start_i:stop_i]
+        mvbf_data = rf_data[fancy_idx_samples, fancy_idx_channels][0,:,start_i:stop_i]
+        if self.apply_apodization:
+            mvbf_data = np.multiply(mvbf_data, data_mask)
+        das_out = np.zeros(mvbf_data.shape[0], dtype=np.complex64)
         corr_array = np.zeros(((channel_reduction - L +1), L), dtype=np.complex64)
         corr_array_b = np.zeros(((channel_reduction - L +1), L), dtype=np.complex64)
         # Iterate over each datapoint
@@ -193,7 +198,11 @@ class BFMVBFspatial(BFCartesianRealTime):
                 corr_el = np.flip(corr_array[y,:])
                 corr_matr_y2 = np.outer(np.conj(corr_el), corr_el)
                 corr_matrix2 = corr_matrix2 + corr_matr_y2
-            R_inv = np.linalg.inv(0.5 * corr_matrix + 0.5*corr_matrix2 + np.identity(L) * np.trace(corr_matrix) * 1/L )
+            R_inv = np.linalg.inv(
+                0.5 * corr_matrix
+                + 0.5 * corr_matrix2
+                + self.diagonal_loading_scale * np.identity(L) * np.trace(corr_matrix) * 1/L
+            )
 
             # Approx. Inversion
             # diag_elem = np.diagonal(R)
