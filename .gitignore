@@ -3,4 +3,9 @@
 __pycache__/
 tests/*.png
 tests/code/benchmark_iq_phase_rotator/*.png
+tests/code/benchmark_picmus_das_vs_mvbfss/picmus_das_vs_mvbfss_*.png
+tests/code/benchmark_picmus_das_vs_mvbfss/picmus_das_vs_mvbfss_*.csv
+tests/data/Picmus/
+tests/output/
+*.png
 tests/test_bf.ipynb

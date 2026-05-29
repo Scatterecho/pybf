@@ -3,6 +3,8 @@ import numpy as np
 from os.path import dirname, abspath
 import sys
 import time
+import matplotlib
+matplotlib.use("Agg")
 
 # Import pybf modules
 from pybf.pybf.io_interfaces import ImageSaver

@@ -21,6 +21,8 @@ from os.path import abspath
 from os.path import dirname as up
 import numpy as np
 import sys
+import matplotlib
+matplotlib.use("Agg")
 
 path_to_lib = up(up(up(up(up(abspath(__file__))))))
 sys.path.insert(0, path_to_lib)
@@ -121,14 +123,14 @@ circle_pos = np.asarray([[-0.00043, 0.01492, 0.0035, 0.00172],
                             [-0.00043, 0.04279, 0.0035, 0.00172],
                             [-0.0072, 0.02829, 0.0063, 0.00315]])
                             
-CNR_values = eval_obj.evaluate_circ_contrast(circle_pos)
+CNR_values = eval_obj.evaluate_circ_contrast(circle_pos, is_plot=False)
 
 print("CNR values are [dB]:")
 print(str(CNR_values) + "\n")
 
 # Eval tests
 eval_obj2 = PicmusEval(img_data2, bf)
-CNR_values2 = eval_obj2.evaluate_circ_contrast(circle_pos)
+CNR_values2 = eval_obj2.evaluate_circ_contrast(circle_pos, is_plot=False)
 
 print("CNR values are [dB]:")
 print(str(CNR_values2) + "\n")
@@ -142,8 +144,8 @@ plot_image(np.abs(img_data),
                image_z_range=image_z_range,
                db_range=db_range,
                colorscale='Greys',
-               save_fig=True, 
-               show=True,
+               save_fig=False,
+               show=False,
                path_to_save='.')
 
 plot_image(np.abs(img_data2), 
@@ -155,6 +157,6 @@ plot_image(np.abs(img_data2),
                image_z_range=image_z_range,
                db_range=db_range,
                colorscale='Greys',
-               save_fig=True, 
-               show=True,
+               save_fig=False,
+               show=False,
                path_to_save='.')

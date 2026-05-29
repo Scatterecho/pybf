@@ -73,10 +73,11 @@ class PicmusEval:
             FWHM_el_x.append(fwhm_x)
             FWHM_el_y.append(fwhm_y)
 
-            x1, y1 = plot[0], plot[1]
-            ax.plot(x1, y1, color='green')
-            x2, y2 = plot[2], plot[3]
-            ax.plot(x2, y2, color='red')
+            if(is_plot is True):
+                x1, y1 = plot[0], plot[1]
+                ax.plot(x1, y1, color='green')
+                x2, y2 = plot[2], plot[3]
+                ax.plot(x2, y2, color='red')
         
         FWHM_el_x = np.asarray(FWHM_el_x)
         FWHM_el_y = np.asarray(FWHM_el_y)

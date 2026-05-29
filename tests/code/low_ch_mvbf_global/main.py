@@ -21,6 +21,8 @@ from os.path import abspath
 from os.path import dirname as up
 import numpy as np
 import sys
+import matplotlib
+matplotlib.use("Agg")
 
 # %%
 path_to_lib = up(up(up(up(up(abspath(__file__))))))
@@ -116,14 +118,14 @@ eval_obj = PicmusEval(img_data, bf)
 circle_pos = np.asarray([[-0.00022,0.01867, 0.002, 0.0005],
                             [-0.0105, 0.0281, 0.007, 0.0039]])
 
-CNR_values = eval_obj.evaluate_circ_contrast(circle_pos)
+CNR_values = eval_obj.evaluate_circ_contrast(circle_pos, is_plot=False)
 
 
 scatterer_pos = np.asarray([[-0.001, 0.018, 0.001, 0.001],
                             [-0.0104, 0.0375, 0.001, 0.001],
                             [0.0001, 0.0375, 0.001, 0.001]])
 
-FWHM_x, FWHM_y = eval_obj.evaluate_FWHM(scatterer_pos)
+FWHM_x, FWHM_y = eval_obj.evaluate_FWHM(scatterer_pos, is_plot=False)
 
 print("CNR values are [dB]:")
 print(str(CNR_values) + "\n")
@@ -144,5 +146,5 @@ plot_image(np.abs(img_data),
            db_range=db_range,
            colorscale='Greys',
            save_fig=True, 
-           show=True,
+           show=False,
            path_to_save='.')

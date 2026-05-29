@@ -735,6 +735,7 @@ def mvbf_pixel_core_from_vector(channel_vector, subarray_length, loading_scale):
     steering = np.ones(subarray_length, dtype=np.complex128)
     numerator = np.matmul(r_inv, steering)
     weights = numerator / np.sum(numerator)
+    uniform_weights = np.ones(subarray_length, dtype=np.complex128) / subarray_length
 
     # This mirrors scripts/beamformer_mvbf_spatial_smooth.py exactly:
     # x_sum = np.sum(corr_array, axis=0)
@@ -746,6 +747,20 @@ def mvbf_pixel_core_from_vector(channel_vector, subarray_length, loading_scale):
     # conj(weights). This is not used by PyBF here, but is useful to diagnose
     # whether the complex convention matters at the selected pixel.
     conjugate_weight_output = np.sum(np.conj(weights).T * x_sum) / n_snapshots
+
+    eigenvalues = np.linalg.eigvalsh(r_loaded)
+    diagonal_power = np.real(np.diag(r_loaded))
+    diagonal_scale = np.sqrt(np.outer(diagonal_power, diagonal_power)) + 1e-12
+    coherence = np.abs(r_loaded) / diagonal_scale
+    offdiag_mask = ~np.eye(subarray_length, dtype=bool)
+    mean_offdiag_coherence = float(np.mean(coherence[offdiag_mask]))
+    max_offdiag_coherence = float(np.max(coherence[offdiag_mask]))
+
+    r_times_ones = np.matmul(r_loaded, steering)
+    r_times_ones_parallel = np.mean(r_times_ones)
+    r_times_ones_residual = np.linalg.norm(r_times_ones - r_times_ones_parallel * steering) / (
+        np.linalg.norm(r_times_ones) + 1e-12
+    )
 
     return {
         "snapshots": snapshots,
@@ -760,6 +775,18 @@ def mvbf_pixel_core_from_vector(channel_vector, subarray_length, loading_scale):
         "weight_l2": float(np.linalg.norm(weights)),
         "weight_max_abs": float(np.max(np.abs(weights))),
         "weight_sum": np.sum(weights),
+        "weight_uniform_relative_error": float(
+            np.linalg.norm(weights - uniform_weights) / (np.linalg.norm(uniform_weights) + 1e-12)
+        ),
+        "weight_phase_span_deg": float(
+            np.degrees(np.max(np.angle(weights)) - np.min(np.angle(weights)))
+        ),
+        "eig_min": float(np.min(eigenvalues)),
+        "eig_max": float(np.max(eigenvalues)),
+        "eig_ratio": float(np.max(eigenvalues) / (np.min(eigenvalues) + 1e-12)),
+        "mean_offdiag_coherence": mean_offdiag_coherence,
+        "max_offdiag_coherence": max_offdiag_coherence,
+        "r_times_ones_residual": float(r_times_ones_residual),
         "n_snapshots": int(n_snapshots),
     }
 
@@ -848,10 +875,18 @@ def save_weight_diagnostics(args, mvbf, rf_data, das_image, mvbf_image):
                     "conj_mvbf_abs": np.nan,
                     "cond": np.nan,
                     "weight_l1": np.nan,
-                    "weight_l2": np.nan,
-                    "weight_max_abs": np.nan,
-                    "note": note,
-                }
+                "weight_l2": np.nan,
+                "weight_max_abs": np.nan,
+                "weight_uniform_relative_error": np.nan,
+                "weight_phase_span_deg": np.nan,
+                "eig_min": np.nan,
+                "eig_max": np.nan,
+                "eig_ratio": np.nan,
+                "mean_offdiag_coherence": np.nan,
+                "max_offdiag_coherence": np.nan,
+                "r_times_ones_residual": np.nan,
+                "note": note,
+            }
                 rows.append(row)
                 continue
 
@@ -891,6 +926,14 @@ def save_weight_diagnostics(args, mvbf, rf_data, das_image, mvbf_image):
                 "weight_max_abs": core["weight_max_abs"],
                 "weight_sum_real": np.real(core["weight_sum"]),
                 "weight_sum_imag": np.imag(core["weight_sum"]),
+                "weight_uniform_relative_error": core["weight_uniform_relative_error"],
+                "weight_phase_span_deg": core["weight_phase_span_deg"],
+                "eig_min": core["eig_min"],
+                "eig_max": core["eig_max"],
+                "eig_ratio": core["eig_ratio"],
+                "mean_offdiag_coherence": core["mean_offdiag_coherence"],
+                "max_offdiag_coherence": core["max_offdiag_coherence"],
+                "r_times_ones_residual": core["r_times_ones_residual"],
                 "note": "",
             }
             rows.append(row)
@@ -911,6 +954,16 @@ def save_weight_diagnostics(args, mvbf, rf_data, das_image, mvbf_image):
                 row["weight_max_abs"],
                 row["weight_sum_real"],
                 row["weight_sum_imag"],
+            ))
+            print("         w-vs-uniform rel.err={:.3g}, phase span={:.3g} deg".format(
+                row["weight_uniform_relative_error"],
+                row["weight_phase_span_deg"],
+            ))
+            print("         eig ratio={:.3g}, mean/max offdiag coherence={:.3g}/{:.3g}, R*1 residual={:.3g}".format(
+                row["eig_ratio"],
+                row["mean_offdiag_coherence"],
+                row["max_offdiag_coherence"],
+                row["r_times_ones_residual"],
             ))
 
     if rows:
