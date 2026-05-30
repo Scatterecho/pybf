@@ -62,8 +62,14 @@ class BFMVBFspatial(BFCartesianRealTime):
                  channel_reduction=None,
                  window_width=16,
                  diagonal_loading_scale=1.0,
-                 apply_apodization=False):
+                 apply_apodization=False,
+                 dynamic_aperture=False):
 
+        # In the original implementation, channel_reduction is applied inside
+        # calc_fov_receive_apodization as a fixed center-channel mask.  For
+        # dynamic-aperture MVBF we want to keep the full FOV apodization table
+        # and choose the active channels per pixel inside _delay_and_sum.
+        base_channel_reduction = None if dynamic_aperture else channel_reduction
         super(BFMVBFspatial, self).__init__(f_sampling, tx_strategy, transducer_obj,
                  decimation_factor, interpolation_factor, image_res, 
                  img_config_obj,db_range, start_time,
@@ -72,13 +78,14 @@ class BFMVBFspatial(BFCartesianRealTime):
                  bp_filter_params,
                  envelope_detector,
                  picmus_dataset,
-                 channel_reduction=channel_reduction,
+                 channel_reduction=base_channel_reduction,
                  is_inherited=False)
         
         self.channel_reduction = channel_reduction
         self.window_width = window_width
         self.diagonal_loading_scale = diagonal_loading_scale
         self.apply_apodization = apply_apodization
+        self.dynamic_aperture = dynamic_aperture
 
         # Beamform the data using selected BF-core
     def beamform(self, rf_data, numba_active=False):
@@ -164,61 +171,107 @@ class BFMVBFspatial(BFCartesianRealTime):
         # FBSS-MVBF  goes here
         L = self.window_width
 
-        channel_reduction = self.channel_reduction
-        ch_nr = n_elements
-        start_i = int(np.ceil((ch_nr - channel_reduction)/2))
-        stop_i = int(start_i + channel_reduction)
+        if self.dynamic_aperture:
+            # Pixel-dependent aperture:
+            #   1. Use the FOV/F-number apodization table to find channels
+            #      that can "see" each pixel.
+            #   2. Optionally cap the active aperture by channel_reduction,
+            #      choosing the channels closest to the pixel lateral position.
+            #   3. Run FBSS-MVBF inside this local aperture.
+            data_mask = self._apod
+            mvbf_data = rf_data[fancy_idx_samples, fancy_idx_channels][0,:,:]
+            das_out = np.zeros(mvbf_data.shape[0], dtype=np.complex64)
+            elements_x = self._transducer.elements_coords[0,:]
 
-        data_mask = self._apod[:,start_i:stop_i]
-        mvbf_data = rf_data[fancy_idx_samples, fancy_idx_channels][0,:,start_i:stop_i]
-        if self.apply_apodization:
-            mvbf_data = np.multiply(mvbf_data, data_mask)
-        das_out = np.zeros(mvbf_data.shape[0], dtype=np.complex64)
-        corr_array = np.zeros(((channel_reduction - L +1), L), dtype=np.complex64)
-        corr_array_b = np.zeros(((channel_reduction - L +1), L), dtype=np.complex64)
-        # Iterate over each datapoint
-        for i in range(0, mvbf_data.shape[0]):
-            # Skip irrelevant points
-            if (np.sum(data_mask[i,:]) == 0):
-                continue
-            # Create spatial smoothing array
-            for j in range(0, (channel_reduction - L +1)):
-                corr_array[j] = mvbf_data[i, j:(j+L)]
-                # corr_array_b[j] = mvbf_data[i, (channel_reduction - j - L):(channel_reduction - j)][::-1]
-                corr_array_b[j] = np.flip(mvbf_data[i, j:(j+L)])
+            for i in range(0, mvbf_data.shape[0]):
+                active_channels = np.where(data_mask[i,:] > 0)[0]
+                if active_channels.shape[0] == 0:
+                    continue
 
-            # # Inversion
-            ones_vect = np.ones(L)
-            
-            corr_matrix = np.zeros((L,L), dtype=np.complex64)
-            corr_matrix2 = np.zeros((L,L), dtype=np.complex64)
-            for y in range(0, corr_array.shape[0]):
-                corr_matr_y = np.outer(np.conj(corr_array[y,:]), corr_array[y,:])
-                corr_matrix = corr_matrix + corr_matr_y
-                corr_el = np.flip(corr_array[y,:])
-                corr_matr_y2 = np.outer(np.conj(corr_el), corr_el)
-                corr_matrix2 = corr_matrix2 + corr_matr_y2
-            R_inv = np.linalg.inv(
-                0.5 * corr_matrix
-                + 0.5 * corr_matrix2
-                + self.diagonal_loading_scale * np.identity(L) * np.trace(corr_matrix) * 1/L
-            )
+                if self.channel_reduction is not None and active_channels.shape[0] > self.channel_reduction:
+                    pixel_x = self._pixels_coords[0, i]
+                    active_x = elements_x[active_channels]
+                    nearest_order = np.argsort(np.abs(active_x - pixel_x))
+                    active_channels = np.sort(active_channels[nearest_order[:self.channel_reduction]])
 
-            # Approx. Inversion
-            # diag_elem = np.diagonal(R)
-            # diag_elem = 1/diag_elem
-            # R_inv = diag_elem * np.identity(R.shape[0])
+                channel_vector = mvbf_data[i, active_channels]
+                if self.apply_apodization:
+                    channel_vector = np.multiply(channel_vector, data_mask[i, active_channels])
 
-            numerator   = np.matmul(R_inv, ones_vect.T) # vector N=nr_channels
-            denominator = np.sum(np.matmul(R_inv, ones_vect.T)) # scalar - normalisation
+                local_L = min(L, channel_vector.shape[0])
+                if local_L < 1:
+                    continue
+                das_out[i] = self._mvbf_pixel_from_channel_vector(channel_vector, local_L)
+        else:
+            # Original fixed-center aperture:
+            # channel_reduction selects the same center channels for every
+            # pixel.  This is useful as a baseline/demo, but it naturally
+            # narrows the effective FOV when channel_reduction is small.
+            channel_reduction = self.channel_reduction
+            if channel_reduction is None:
+                channel_reduction = n_elements
+            channel_reduction = min(channel_reduction, n_elements)
+            ch_nr = n_elements
+            start_i = int(np.ceil((ch_nr - channel_reduction)/2))
+            stop_i = int(start_i + channel_reduction)
 
-            w_tilda = numerator / denominator
-            x_sum = np.sum(corr_array, axis=0)
-            result = 1/(channel_reduction - L +1) * np.sum(w_tilda.T * x_sum)
-            das_out[i] = result
+            data_mask = self._apod[:,start_i:stop_i]
+            mvbf_data = rf_data[fancy_idx_samples, fancy_idx_channels][0,:,start_i:stop_i]
+            if self.apply_apodization:
+                mvbf_data = np.multiply(mvbf_data, data_mask)
+            das_out = np.zeros(mvbf_data.shape[0], dtype=np.complex64)
+            # Iterate over each datapoint
+            for i in range(0, mvbf_data.shape[0]):
+                # Skip irrelevant points
+                if (np.sum(data_mask[i,:]) == 0):
+                    continue
+                das_out[i] = self._mvbf_pixel_from_channel_vector(mvbf_data[i,:], L)
         #######################################################################
 
 
 
         # Output shape: (n_modes x n_points)
         return das_out
+
+    def _mvbf_pixel_from_channel_vector(self, channel_vector, subarray_length):
+        n_channels = channel_vector.shape[0]
+        L = subarray_length
+        if n_channels < L or L < 1:
+            return 0
+
+        n_snapshots = n_channels - L + 1
+        corr_array = np.zeros((n_snapshots, L), dtype=np.complex64)
+
+        # Create spatial smoothing snapshots.
+        for j in range(0, n_snapshots):
+            corr_array[j] = channel_vector[j:(j+L)]
+
+        ones_vect = np.ones(L)
+        corr_matrix = np.zeros((L,L), dtype=np.complex64)
+        corr_matrix2 = np.zeros((L,L), dtype=np.complex64)
+        for y in range(0, corr_array.shape[0]):
+            corr_matr_y = np.outer(np.conj(corr_array[y,:]), corr_array[y,:])
+            corr_matrix = corr_matrix + corr_matr_y
+            corr_el = np.flip(corr_array[y,:])
+            corr_matr_y2 = np.outer(np.conj(corr_el), corr_el)
+            corr_matrix2 = corr_matrix2 + corr_matr_y2
+
+        trace_corr = np.trace(corr_matrix)
+        if np.abs(trace_corr) == 0:
+            return 0
+
+        R_inv = np.linalg.inv(
+            0.5 * corr_matrix
+            + 0.5 * corr_matrix2
+            + self.diagonal_loading_scale * np.identity(L) * trace_corr * 1/L
+        )
+
+        numerator   = np.matmul(R_inv, ones_vect.T) # vector N=nr_channels
+        denominator = np.sum(np.matmul(R_inv, ones_vect.T)) # scalar - normalisation
+        if np.abs(denominator) == 0:
+            return 0
+
+        w_tilda = numerator / denominator
+        x_sum = np.sum(corr_array, axis=0)
+        result = 1/(n_snapshots) * np.sum(w_tilda.T * x_sum)
+        return result

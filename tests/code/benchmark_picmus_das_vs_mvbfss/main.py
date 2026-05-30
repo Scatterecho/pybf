@@ -3,6 +3,7 @@ Benchmark DAS versus FBSS-MVBF on the PICMUS contrast/speckle dataset.
 
 This script is intended for fair engineering comparisons:
     - use the same receive aperture for DAS and MVBFss
+    - optionally use pixel-dependent dynamic aperture for MVBFss
     - optionally apply receive apodization before MVBF covariance estimation
     - report runtime and circular CNR metrics
     - save a side-by-side dB comparison figure and CSV metrics
@@ -13,6 +14,7 @@ Default run from repository root:
 Examples:
     python tests/code/benchmark_picmus_das_vs_mvbfss/main.py --image-res 80 120 --channel-reduction 128
     python tests/code/benchmark_picmus_das_vs_mvbfss/main.py --channel-reduction 64 --window-width 8
+    python tests/code/benchmark_picmus_das_vs_mvbfss/main.py --dynamic-aperture --channel-reduction 128
     python tests/code/benchmark_picmus_das_vs_mvbfss/main.py --no-mvbf-apply-apodization
 """
 
@@ -66,6 +68,13 @@ def parse_args():
     parser.add_argument("--plane-wave-indices", type=int, nargs="+", default=[33, 37, 38, 42])
     parser.add_argument("--mvbf-apply-apodization", dest="mvbf_apply_apodization", action="store_true", default=True)
     parser.add_argument("--no-mvbf-apply-apodization", dest="mvbf_apply_apodization", action="store_false")
+    parser.add_argument(
+        "--dynamic-aperture",
+        dest="dynamic_aperture",
+        action="store_true",
+        default=False,
+        help="Use per-pixel FOV/F-number aperture for MVBFss instead of fixed center channel reduction",
+    )
     return parser.parse_args()
 
 
@@ -88,6 +97,16 @@ def build_beamformers(args, data_loader, tx_strategy):
     z0, z1 = args.z_range
     img_config = ImageSettings(x0, x1, z0, z1, 5, data_loader.transducer)
 
+    # For fixed-center experiments, channel_reduction is applied to both DAS
+    # and MVBF through PyBF's original center-channel mask.  For dynamic MVBF,
+    # DAS keeps the full FOV/F-number receive apodization, while MVBF uses
+    # channel_reduction only as a per-pixel maximum aperture cap.
+    das_channel_reduction = (
+        int(data_loader.transducer.num_of_elements)
+        if args.dynamic_aperture
+        else args.channel_reduction
+    )
+
     common = dict(
         f_sampling=data_loader.f_sampling,
         tx_strategy=tx_strategy,
@@ -102,14 +121,23 @@ def build_beamformers(args, data_loader, tx_strategy):
         bp_filter_params=[1e6, 8e6, 0.5e6],
         envelope_detector="I_Q",
         picmus_dataset=True,
+    )
+
+    das_common = dict(
+        common,
+        channel_reduction=das_channel_reduction,
+    )
+    mvbf_common = dict(
+        common,
         channel_reduction=args.channel_reduction,
     )
 
-    das = BFCartesianReference(**common)
+    das = BFCartesianReference(**das_common)
     mvbf = BFMVBFspatial(
-        **common,
+        **mvbf_common,
         window_width=args.window_width,
         apply_apodization=args.mvbf_apply_apodization,
+        dynamic_aperture=args.dynamic_aperture,
     )
     return das, mvbf
 
@@ -179,7 +207,9 @@ def evaluate_cnr(args, das_image, mvbf_image):
 
 def save_outputs(args, das_image, mvbf_image, das_time, mvbf_time, cnr_rows):
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    suffix = "aperture{}_L{}_{}x{}".format(
+    aperture_mode = "dynamic" if args.dynamic_aperture else "fixed"
+    suffix = "{}_aperture{}_L{}_{}x{}".format(
+        aperture_mode,
         args.channel_reduction,
         args.window_width,
         args.image_res[0],
@@ -224,7 +254,8 @@ def save_outputs(args, das_image, mvbf_image, das_time, mvbf_time, cnr_rows):
         fig.colorbar(im, ax=ax, fraction=0.046)
 
     fig.suptitle(
-        "PICMUS contrast: DAS vs MVBFss, aperture={}, L={}, apod={}\nDAS {:.2f}s, MVBFss {:.2f}s".format(
+        "PICMUS contrast: DAS vs MVBFss, mode={}, aperture={}, L={}, apod={}\nDAS {:.2f}s, MVBFss {:.2f}s".format(
+            aperture_mode,
             args.channel_reduction,
             args.window_width,
             args.mvbf_apply_apodization,
@@ -244,6 +275,7 @@ def main():
     print("Dataset: {}".format(args.dataset))
     print("Image resolution: {}".format(args.image_res))
     print("Channel reduction: {}".format(args.channel_reduction))
+    print("MVBF dynamic aperture: {}".format(args.dynamic_aperture))
     print("MVBF window width L: {}".format(args.window_width))
     print("MVBF apply apodization: {}".format(args.mvbf_apply_apodization))
     print("Plane-wave indices: {}".format(args.plane_wave_indices))
