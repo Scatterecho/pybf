@@ -8,4 +8,5 @@ tests/code/benchmark_picmus_das_vs_mvbfss/picmus_das_vs_mvbfss_*.csv
 tests/data/Picmus/
 tests/output/
 *.png
+*.avi
 tests/test_bf.ipynb

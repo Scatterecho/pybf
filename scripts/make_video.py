@@ -17,7 +17,9 @@
 """
 
 import sys
+import argparse
 from os.path import dirname, abspath
+from pathlib import Path
 import cv2
 import h5py
 import numpy as np
@@ -48,16 +50,22 @@ def make_video(dataset_file_path,
     aspect_ratio = x_range / z_range
     print("Aspect ratio: ", aspect_ratio)
 
-    # Define output image shape
-    img_shape_out = (img_shape[0], int(img_shape[0]/aspect_ratio))
-    print("Output image resolution: ", img_shape_out)
+    # Define output video frame size.  OpenCV uses (width, height), while
+    # numpy image arrays use (height, width).
+    output_height = int(img_shape[0])
+    output_width = int(round(output_height * aspect_ratio))
+    frame_size = (output_width, output_height)
+    print("Output video frame size (width, height): ", frame_size)
 
     # Construct save path (save to dataset folder by default)
     if save_path is None:
-        len_to_cut = len(dataset_file_path.split('/')[-1])
-        save_path = dataset_file_path[:-1 - len_to_cut]
+        save_path = str(Path(dataset_file_path).resolve().parent)
 
-    video = cv2.VideoWriter(save_path + '/' + 'video.avi', cv2.VideoWriter_fourcc(*"MJPG"), int(video_fps), img_shape_out, 0)
+    video = cv2.VideoWriter(str(Path(save_path) / 'video.avi'),
+                            cv2.VideoWriter_fourcc(*"MJPG"),
+                            int(video_fps),
+                            frame_size,
+                            0)
 
     for n_frame in frames_list:
         # Take absolute value of high resilution frames
@@ -69,7 +77,7 @@ def make_video(dataset_file_path,
 
         # Convert to uint8_t
         frame_data_uint8 = np.uint8(frame_data_log/np.amax(frame_data_log) * 255)
-        frame_final = cv2.resize(frame_data_uint8, img_shape_out)
+        frame_final = cv2.resize(frame_data_uint8, frame_size)
         video.write(frame_final.astype('uint8'))
     
     # Close hdf5 file and video

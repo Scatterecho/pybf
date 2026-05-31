@@ -277,9 +277,12 @@ class ImageLoader:
         # Calculate indices of existing frames
         self._frames_indices = [int(filename.split('_')[-1]) for filename in frame_names_list]
         
-        # Calculate number of low resolution images per frame
-        # Each folder containts low res images + 1 high resolution image
-        lri_names_list = list(self._data_subgroup['frame_0'].keys())
+        # Calculate number of low resolution images per frame.
+        # Each folder contains low res images + optionally 1 high resolution image.
+        # Older code assumed "frame_0", but ImageSaver and bundled datasets may
+        # use frame_1 or other frame indices.  Use the first available frame.
+        first_frame_name = sorted(frame_names_list, key=lambda name: int(name.split('_')[-1]))[0]
+        lri_names_list = list(self._data_subgroup[first_frame_name].keys())
 
         # Kick out high resolution image
         if 'high_res_image' in lri_names_list:
